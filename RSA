@@ -1,0 +1,151 @@
+//linkedin.com/in/mousa123
+
+import java.math.BigInteger;
+import java.security.SecureRandom;
+import java.util.Scanner;
+
+public class RSA {
+    // Key components (all final for security)
+    private final BigInteger p, q;       // Secret primes
+    private final BigInteger n;          // Public modulus (p*q)
+    private final BigInteger phi;        // Euler's totient (p-1)(q-1)
+    private final BigInteger e;          // Public exponent (usually 65537)
+    private final BigInteger d;          // Private exponent
+    private final BigInteger dp, dq;     // CRT exponents
+    private final BigInteger pInvq;      // CRT precomputed value
+    private final int bitLength = 1024;  // Key size
+    private final SecureRandom random = new SecureRandom(); // Crypto-grade RNG
+
+    public RSA() {
+        /* 1. PRIME GENERATION */
+        // Generate two big random primes (1024 bits each)
+        p = BigInteger.probablePrime(bitLength, random);
+        q = BigInteger.probablePrime(bitLength, random);
+        
+        /* 2. MODULUS CALCULATION */
+        // n = p*q (this is the public modulus)
+        n = p.multiply(q);
+        
+        /* 3. EULER'S TOTIENT */
+        // φ(n) = (p-1)*(q-1) (needed for key gen)
+        phi = p.subtract(BigInteger.ONE).multiply(q.subtract(BigInteger.ONE));
+        
+        /* 4. PUBLIC EXPONENT */
+        // Start with common e=65537 (binary 10000000000000001 - only two 1's for fast computation)
+        BigInteger tempE = BigInteger.valueOf(65537);
+        // Ensure e and φ(n) are coprime (gcd=1)
+        while (!phi.gcd(tempE).equals(BigInteger.ONE)) {
+            tempE = tempE.add(BigInteger.ONE); // Increment if not coprime
+        }
+        e = tempE; // Finalize public exponent
+        
+        /* 5. PRIVATE KEY */
+        // d = e⁻¹ mod φ(n) (modular inverse)
+        d = e.modInverse(phi);
+        
+        /* 6. CRT OPTIMIZATION PRE-COMPUTE */
+        // dp = d mod (p-1)  [Fermat's Little Theorem]
+        dp = d.mod(p.subtract(BigInteger.ONE));
+        // dq = d mod (q-1)
+        dq = d.mod(q.subtract(BigInteger.ONE));
+        // pInvq = p⁻¹ mod q (for CRT recombination)
+        pInvq = p.modInverse(q);
+    }
+
+    /* ENCRYPTION WITH AUTO-SEGMENTATION */
+    public byte[][] encrypt(String message) {
+        // Convert message to raw bytes
+        byte[] bytes = message.getBytes();
+        
+        /* BLOCK SIZE CALCULATION */
+        // For 1024-bit RSA (128 bytes max):
+        // Reserve 11 bytes for potential padding → 117 bytes usable
+        int blockSize = bitLength/8 - 11;
+        
+        // Calculate how many blocks we need
+        int numBlocks = (int) Math.ceil(bytes.length / (double)blockSize);
+        byte[][] encryptedBlocks = new byte[numBlocks][];
+        
+        /* PROCESS EACH BLOCK */
+        for (int i = 0; i < numBlocks; i++) {
+            // Cut message into segments
+            int start = i * blockSize;
+            int end = Math.min(start + blockSize, bytes.length);
+            byte[] block = new byte[end - start];
+            System.arraycopy(bytes, start, block, 0, end - start);
+            
+            /* RSA ENCRYPTION FORMULA: C = Mᵉ mod n */
+            // Convert block to positive BigInteger
+            BigInteger m = new BigInteger(1, block);
+            // Encrypt using square-and-multiply
+            encryptedBlocks[i] = modExp(m, e, n).toByteArray();
+        }
+        return encryptedBlocks;
+    }
+
+    /* DECRYPTION PROCESS */
+    public String decrypt(byte[][] encryptedBlocks) {
+        StringBuilder sb = new StringBuilder();
+        
+        /* PROCESS EACH ENCRYPTED BLOCK */
+        for (byte[] block : encryptedBlocks) {
+            // Convert to BigInteger
+            BigInteger c = new BigInteger(1, block);
+            
+            /* RSA DECRYPTION: M = Cᵈ mod n (using CRT) */
+            byte[] decryptedBlock = crtDecrypt(c).toByteArray();
+            sb.append(new String(decryptedBlock));
+        }
+        return sb.toString();
+    }
+
+    /* SQUARE-AND-MULTIPLY ALGORITHM */
+    private BigInteger modExp(BigInteger base, BigInteger exp, BigInteger mod) {
+        BigInteger result = BigInteger.ONE;
+        
+        // Process each bit of the exponent from left to right
+        for (int i = exp.bitLength() - 1; i >= 0; i--) {
+            // 1. SQUARE STEP
+            result = result.multiply(result).mod(mod);
+            
+            // 2. CONDITIONAL MULTIPLY STEP
+            if (exp.testBit(i)) {
+                result = result.multiply(base).mod(mod);
+            }
+        }
+        return result;
+    }
+
+    /* CRT DECRYPTION (4X FASTER) */
+    private BigInteger crtDecrypt(BigInteger c) {
+        // 1. Compute modulo p and q separately
+        BigInteger mp = modExp(c.mod(p), dp, p); // mp = C^dp mod p
+        BigInteger mq = modExp(c.mod(q), dq, q); // mq = C^dq mod q
+        
+        // 2. Chinese Remainder Theorem recombination
+        // h = (mq - mp) * p⁻¹ mod q
+        BigInteger h = mq.subtract(mp).multiply(pInvq).mod(q);
+        
+        // Final result: mp + p*h
+        return mp.add(p.multiply(h));
+    }
+
+    public static void main(String[] args) {
+        RSA rsa = new RSA();
+        Scanner scanner = new Scanner(System.in);
+        
+        System.out.println("Enter message to encrypt:");
+        String message = scanner.nextLine();
+        
+        /* ENCRYPTION DEMO */
+        byte[][] encrypted = rsa.encrypt(message);
+        System.out.println("\nEncrypted blocks:");
+        for (int i = 0; i < encrypted.length; i++) {
+            System.out.println("Block " + (i+1) + ": " + new BigInteger(1, encrypted[i]));
+        }
+        
+        /* DECRYPTION DEMO */
+        System.out.println("\nDecrypted message: " + rsa.decrypt(encrypted));
+        scanner.close();
+    }
+}
